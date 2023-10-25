@@ -23,3 +23,5 @@ The TP includes modifying the Movie service with graphQL and the User service th
 `cd .\movie\ ` `py .\movie.py`
 
 `cd .\showtime\ ` `py .\showtime.py`
+
+To run queries you should use the route http://localhost:3001/graphql
