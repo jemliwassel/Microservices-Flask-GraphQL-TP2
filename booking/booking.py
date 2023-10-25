@@ -1,60 +1,74 @@
-import grpc
-from concurrent import futures
-import booking_pb2
-import booking_pb2_grpc
+from flask import Flask, request, jsonify, make_response
 import json
+import requests
 
-class BookingServicer(booking_pb2_grpc.BookingServicer):
+app = Flask(__name__)
 
-    def __init__(self):
-        with open('{}/data/bookings.json'.format("."), "r") as jsf:
-            self.db = json.load(jsf)["bookings"]
-    
-    def GetBookingByUserID(self, request, context):
-        user_id = request.user_id 
-        for booking in self.db : 
-            if booking['userid'] == user_id :
-                # print("Boking was found successfully !")
-                booking_response = booking_pb2.BookingData(user_id = user_id)
-                for dates in booking['dates'] : 
-                    user_reservation = booking_pb2.MovieDates(
-                        date = dates['date'],
-                        movies = dates ['movies']
-                    )
-                    booking_response.dates.append(user_reservation)
-                return booking_response
-        return booking_pb2.BookingData()
-    
-    def AddBookingForUser(self, request, context):
-        user_id = request.user_id
-        date = request.date
-        movie_id = request.movie_id
-        for booking in self.db:
-            if booking['userid'] == user_id:
-                for dates in booking['dates']:
-                    if dates['date'] == date:               
-                        if movie_id not in dates['movies']:
-                            dates['movies'].append(movie_id)
-                        else:
-                            return booking_pb2.AddBookingResponse(success= False, message =f"Le film avec l'id {movie_id} est déjà réservé pour cette date.")
+PORT = 3201
+HOST = "0.0.0.0"
+
+with open("{}/data/bookings.json".format("."), "r") as jsf:
+    bookings = json.load(jsf)["bookings"]
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return "<h1 style='color:blue'>Welcome to the Booking service!</h1>"
+
+
+@app.route("/bookings", methods=["GET"])
+def get_json():
+    res = make_response(jsonify(bookings), 200)
+    return res
+
+
+@app.route("/bookings/<user_id>", methods=["GET"])
+def get_booking_for_user(user_id):
+    for booking in bookings:
+        if str(booking["userid"] == str(user_id)):
+            res = make_response(jsonify(booking), 200)
+            return res
+    return make_response(jsonify({"error": "User ID not found"}), 400)
+
+
+@app.route("/bookings/<user_id>", methods=["POST"])
+def add_booking_byuser(user_id):
+    req = request.get_json()
+    if "date" not in req or "movies" not in req:
+        return make_response(jsonify({"error": "Invalid request data"}), 409)
+    date = req["date"]
+    movie_id_to_book = req["movies"]
+    movies = requests.get(f"http://127.0.0.1:3202/showtimes/{date}").json()
+    if movie_id_to_book not in movies["movies"]:
+        return make_response(
+            jsonify({"error": "movie ID was not found in showtimes"}), 409
+        )
+    for booking in bookings:
+        if booking["userid"] == user_id:
+            for dates in booking["dates"]:
+                if dates["date"] == date:
+                    if movie_id_to_book not in dates["movies"]:
+                        dates["movies"].append(movie_id_to_book)
                     else:
-                        new_date = {
-                            'date': date,
-                            'movies': [movie_id]
-                        }
-                        booking["dates"].append(new_date)
-        new_bookings = {"bookings": self.db}
-        with open('{}/data/bookings.json'.format("."), "w") as wfile:
-            json.dump(new_bookings, wfile)
-        return booking_pb2.AddBookingResponse(success=True, message="Réservation ajoutée avec succès.")
-  
-def serve():
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    booking_pb2_grpc.add_BookingServicer_to_server(BookingServicer(), server)
-    server.add_insecure_port('[::]:3001')
-    server.start()
-    server.wait_for_termination()
+                        return make_response(
+                            jsonify({"error": "Movie ID already exists for the date."}),
+                            409,
+                        )
+                else:
+                    booking["dates"].append(
+                        {"date": date, "movies": [movie_id_to_book]}
+                    )
+            return make_response(jsonify({"message": "Booking added"}), 200)
+    new_booking = {
+        "user_id": user_id,
+        "dates": [{"date": date, "movies": [movie_id_to_book]}],
+    }
+    bookings.append(new_booking)
+    with open("databases/bookings.json", "w") as jsf:
+        json.dump({"bookings": bookings}, jsf)
+    return make_response(jsonify({"message": "Booking added Successfully"}), 200)
 
 
-if __name__ == '__main__':
-    serve()
+if __name__ == "__main__":
+    print("Server running in port %s" % (PORT))
+    app.run(host=HOST, port=PORT, debug=True)
